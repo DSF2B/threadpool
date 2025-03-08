@@ -3,6 +3,7 @@
 #include <thread>
 #include <iostream>
 const int TASK_MAX_THRESHHOLD = 1024;
+//******ThreadPool******//
 // 线程池构造
 ThreadPool::ThreadPool() : initThreadSize_(0),
                            taskSize_(0),
@@ -21,33 +22,6 @@ void ThreadPool::setMode(PoolMode mode)
 void ThreadPool::setTaskQueMaxThreshHold(int threshhold)
 {
     taskQueMaxThreshHold_ = threshhold;
-}
-// 给线程池提交任务 用户调用该接口传入任务，生产任务
-void ThreadPool::submitTask(std::shared_ptr<Task> sp)
-{
-    // 获取锁
-    std::unique_lock<std::mutex> lock(taskQueMtx_);
-    // 线程通信，等待任务队列有空
-    while (taskQue_.size() == taskQueMaxThreshHold_)
-    {
-        // 超时反馈
-        // wait:一直等 wait_for:加上时间参数 wait_until:时间终点
-        if (notFull_.wait_for(lock, std::chrono::seconds(1)) == std::cv_status::timeout)
-        {
-            // 等待1s条件依旧没有满足
-            std::cerr << "task queue is full,submit task fail." << std::endl;
-            return;
-        }
-        // notFull_.wait(lock);
-    }
-    // notFull_.wait(lock,[&]()->bool{return taskQue_.size() < taskQueMaxThreshHold_;});
-    // if(!notFull_.wait_for(lock,std::chrono::seconds(1),[&]()->bool{return taskQue_.size()<taskQueMaxThreshHold_;}));
-    // 如有空余，把任务放入队列
-    taskQue_.emplace(sp);
-    taskSize_++;
-    // 通知所有等待在notEmpty上的消费者，进行唤醒
-    notEmpty_.notify_all();
-    // 自动释放锁
 }
 // 开启线程池
 void ThreadPool::start(int initThreadSize)
@@ -76,6 +50,35 @@ void ThreadPool::start(int initThreadSize)
     {
         threads_[i]->start();
     }
+}
+// 给线程池提交任务 用户调用该接口传入任务，生产任务
+Result ThreadPool::submitTask(std::shared_ptr<Task> sp)
+{
+    // 获取锁
+    std::unique_lock<std::mutex> lock(taskQueMtx_);
+    // 线程通信，等待任务队列有空
+    while (taskQue_.size() == taskQueMaxThreshHold_)
+    {
+        // 超时反馈
+        // wait:一直等 wait_for:加上时间参数 wait_until:时间终点
+        if (notFull_.wait_for(lock, std::chrono::seconds(1)) == std::cv_status::timeout)
+        {
+            // 等待1s条件依旧没有满足
+            std::cerr << "task queue is full,submit task fail." << std::endl;
+            return Result(sp,false);//Task result;
+            //return tast->getResult();wrong可能考虑Task里设置Result存放返回值，然后用getResult（）返回一个Result,但是此时
+        }
+        // notFull_.wait(lock);
+    }
+    // notFull_.wait(lock,[&]()->bool{return taskQue_.size() < taskQueMaxThreshHold_;});
+    // if(!notFull_.wait_for(lock,std::chrono::seconds(1),[&]()->bool{return taskQue_.size()<taskQueMaxThreshHold_;}));
+    // 如有空余，把任务放入队列
+    taskQue_.emplace(sp);
+    taskSize_++;
+    // 通知所有等待在notEmpty上的消费者，进行唤醒
+    notEmpty_.notify_all();
+    // 自动释放锁
+    return Result(sp);
 }
 /*
 线程同步
@@ -117,10 +120,15 @@ void ThreadPool::threadFunc()
         // 当前线程负责执行这个任务
         if (task != nullptr)
         {
-            task->run();
+            //task->run();//1.执行任务2.将返回值交给Result
+            task->exec();
         }
     }
 }
+
+
+
+//******Thread******//
 // 线程构造
 Thread::Thread(ThreadFunc func) : func_(func) {}
 // 线程析构
@@ -133,11 +141,11 @@ void Thread::start()
     t.detach();           // 设置分离线程 pthread_detech pthread_t设置为分离线程
 }
 
-Semaphore::Semaphore(int resLimit=0):resLimit_(resLimit){}
 
-Semaphore::~Semaphore()
-{
-}
+
+//******Semaphore******//
+Semaphore::Semaphore(int resLimit=0):resLimit_(resLimit){}
+Semaphore::~Semaphore(){}
 void Semaphore::wait(){
     std::unique_lock<std::mutex> lock(mtx_);
     //等待信号量有资源，没有资源阻塞
@@ -146,11 +154,37 @@ void Semaphore::wait(){
     }
     // cond_.wait(lock,[&]()->bool{resLimit_>0;});
     resLimit_--;
-
 }
 //增加一个信号量
 void Semaphore::post(){
     std::unique_lock<std::mutex> lock(mtx_);
     resLimit_++;
     cond_.notify_all();
+}
+
+
+//*********Task**********//
+Task::Task():result_(nullptr){}
+void Task::exec(){
+    if(result_!=nullptr){
+        result_->setVal(run());
+    }
+}
+void Task::setResult(Result* res){
+    result_=res;
+}
+
+
+//******Result******//
+Result::Result(std::shared_ptr<Task> task,bool isVaild=true):task_(task),isVaild_(isVaild){
+    task_->setResult(this);
+}
+void Result::setVal(Any any){//获取到值唤醒等待这信号量上的getVal()
+    this->any_=std::move(any);
+    sem_.post();
+}
+Any Result::getVal(){//用户调用
+    if(!isVaild_)return "";
+    sem_.wait();//如果任务没有执行完毕，用户线程阻塞在这里，等待在信号量
+    return std::move(any_);
 }

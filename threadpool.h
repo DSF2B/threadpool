@@ -8,6 +8,71 @@
 #include <mutex>
 #include <condition_variable>
 #include <functional>
+/*
+example:
+ThreadPool pool;
+pool.start(4);
+class Mytask: public Task{
+    public:
+        void run(){//线程代码...}
+};
+pool.submitTask(std::make_shared<Mytask>());
+*/
+// 线程池
+class ThreadPool
+{
+public:
+    ThreadPool();
+    ~ThreadPool();
+    // 设置线程池模式
+    void setMode(PoolMode mode);
+    // 设置任务队列数量上限
+    void setTaskQueMaxThreshHold(int threshhold);
+    // 给线程池提交任务
+    Result submitTask(std::shared_ptr<Task> sp);
+    // 开启线程池
+    void start(int initThreadSize = 4);
+
+    ThreadPool(const ThreadPool &) = delete;
+    ThreadPool &operator=(const ThreadPool &) = delete;
+
+private:
+    // 定义线程函数
+    void threadFunc();
+
+private:
+    std::vector<std::unique_ptr<Thread>> threads_; // 线程列表
+    int initThreadSize_;                           // 初始线程数量
+
+    std::queue<std::shared_ptr<Task>> taskQue_; // 任务队列
+    std::atomic_int taskSize_;                  // 任务数量
+    int taskQueMaxThreshHold_;                  // 任务队列数量上限
+
+    std::mutex taskQueMtx_;            // 保证任务队列的线程安全
+    std::condition_variable notFull_;  // 表示任务队列不满
+    std::condition_variable notEmpty_; // 表示任务队列不空
+
+    PoolMode poolMode_; // 当前线程池工作模式
+};
+
+
+// 线程类型
+class Thread
+{
+public:
+    // 线程函数对象
+    //???????????????????
+    using ThreadFunc = std::function<void()>;
+    // 启动线程
+    void start();
+    // 线程构造
+    Thread(ThreadFunc func);
+    // 线程析构
+    ~Thread();
+
+private:
+    ThreadFunc func_;
+};
 
 class Any{
 public:
@@ -82,6 +147,8 @@ private:
 信号量：适用于对共享资源的访问进行限制，可以用于实现互斥锁和线程同步。
 需要注意的是，条件变量和信号量是不同的同步机制，选择使用哪个取决于具体的需求。条件变量通常用于线程之间等待和通知的情况，而信号量主要用于资源的控制和限制。
 */
+
+
 class Semaphore
 {
 private:
@@ -99,76 +166,34 @@ public:
 // 任务抽象基类
 class Task
 {
+private:
+    Result *result_;//这里只能用指针，且不能用shared_ptr，因为Result里已经有Task的shared_ptr了，Result的生命周期长于Task,
 public:
+    Task();
+    ~Task()=default;
     virtual Any run() = 0;
+    void exec();
+    void setResult(Result* res);
 };
 enum class PoolMode
 {
     MODE_FIXED,  // 固定数量的线程
     MODE_CACHED, // 线程数量动态增长
 };
-// 线程类型
-class Thread
+
+// 结果类
+class Result
 {
+private:
+    Any any_;//存储任务返回值
+    Semaphore sem_;//线程任务通信信号量
+    std::shared_ptr<Task> task_;//指向对应获取返回值的对象
+    std::atomic_bool isVaild_; //任务是否正常返回了res
 public:
-    // 线程函数对象
-    //???????????????????
-    using ThreadFunc = std::function<void()>;
-    // 启动线程
-    void start();
-    // 线程构造
-    Thread(ThreadFunc func);
-    // 线程析构
-    ~Thread();
-
-private:
-    ThreadFunc func_;
+    Result();
+    Result(std::shared_ptr<Task> task,bool isVaild=true);
+    ~Result()=default;
+    void setVal(Any any);//获取到值唤醒等待这信号量上的getVal()
+    Any getVal();//等待在信号量
 };
-/*
-example:
-ThreadPool pool;
-pool.start(4);
-class Mytask: public Task{
-    public:
-        void run(){//线程代码...}
-};
-pool.submitTask(std::make_shared<Mytask>());
-*/
-// 线程池
-class ThreadPool
-{
-public:
-    ThreadPool();
-    ~ThreadPool();
-    // 设置线程池模式
-    void setMode(PoolMode mode);
-    // 设置任务队列数量上限
-    void setTaskQueMaxThreshHold(int threshhold);
-    // 给线程池提交任务
-    void submitTask(std::shared_ptr<Task> sp);
-    // 开启线程池
-    void start(int initThreadSize = 4);
-
-    ThreadPool(const ThreadPool &) = delete;
-    ThreadPool &operator=(const ThreadPool &) = delete;
-
-private:
-    // 定义线程函数
-    void threadFunc();
-
-private:
-    std::vector<std::unique_ptr<Thread>> threads_; // 线程列表
-    int initThreadSize_;                           // 初始线程数量
-
-    std::queue<std::shared_ptr<Task>> taskQue_; // 任务队列
-    std::atomic_int taskSize_;                  // 任务数量
-    int taskQueMaxThreshHold_;                  // 任务队列数量上限
-
-    std::mutex taskQueMtx_;            // 保证任务队列的线程安全
-    std::condition_variable notFull_;  // 表示任务队列不满
-    std::condition_variable notEmpty_; // 表示任务队列不空
-
-    PoolMode poolMode_; // 当前线程池工作模式
-};
-
 #endif

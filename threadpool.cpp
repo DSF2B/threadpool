@@ -144,8 +144,7 @@ void Thread::start()
 
 
 //******Semaphore******//
-Semaphore::Semaphore(int resLimit=0):resLimit_(resLimit){}
-Semaphore::~Semaphore(){}
+Semaphore::Semaphore(int resLimit):resLimit_(resLimit){}
 void Semaphore::wait(){
     std::unique_lock<std::mutex> lock(mtx_);
     //等待信号量有资源，没有资源阻塞
@@ -176,7 +175,7 @@ void Task::setResult(Result* res){
 
 
 //******Result******//
-Result::Result(std::shared_ptr<Task> task,bool isVaild=true):task_(task),isVaild_(isVaild){
+Result::Result(std::shared_ptr<Task> task,bool isVaild):task_(task),isVaild_(isVaild){
     task_->setResult(this);
 }
 void Result::setVal(Any any){//获取到值唤醒等待这信号量上的getVal()

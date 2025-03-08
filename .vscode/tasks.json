@@ -4,7 +4,7 @@
         {
             "label": "compile",  // 任务的名称
             "type": "cppbuild",
-            "command": "/usr/bin/g++-11",
+            "command": "/usr/bin/g++",
             "args": [
                 "-fdiagnostics-color=always",
                 "-g",
@@ -22,7 +22,9 @@
                 "kind": "build",
                 "isDefault": true
             },
-            "detail": "编译器: /usr/bin/g++-11"
+            "detail": "编译器: /usr/bin/g++"
         }
     ]
 }
+
+  

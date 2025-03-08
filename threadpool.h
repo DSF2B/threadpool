@@ -8,18 +8,33 @@
 #include <mutex>
 #include <condition_variable>
 #include <functional>
-
+#include <unordered_map>
 
 class Any{
 public:
+    Any()=default;
+    ~Any()=default;
+    Any(const Any&)=delete;//拷贝构造函数声明
+    Any& operator=(const Any&)=delete;//拷贝赋值操作符声明
+    Any(Any&&)=default;//移动构造函数声明，用any=std::move(any)
+	Any& operator=(Any&&) = default;//移动赋值操作符的声明
+
     //用户向Any传入某个类型的值，用模板派生类Derive接受，存到父类的指针对象中
     //模板只能写在头文件中
     template<typename T>
-    Any(T data):base_(std::make_unique<Derive<T>>(data)){};
+    Any(T data):base_(std::make_unique<Derive<T>>(data))
+    {}//unique_ptr不能左值引用
 
     //将值返回
     template<typename T>
     T cast_(){
+        //输出时将父类指针强转为派生类指针，返回模板类型的值
+        Derive<T>* pt = dynamic_cast<Derive<T>*>(base_.get());
+        if(pt == nullptr){
+            throw "type is unmatch!";
+        }
+        return pt->data_;
+    }
 /*
 void*:
     void*可以指向任意类型指针，即可以用任意指针给void*赋值
@@ -54,20 +69,13 @@ C强转：Type b = (Type)a;
         进行上行转换时，与static_cast的效果是完全一样的；进行下行转换时，dynamic_cast具有类型检查的功能，比static_cast更安全；
         并且这种情况下dynamic_cast会要求进行转换的类必须具有多态性（多态要有继承和virtual即具有虚表，直白来说就是有虚函数或虚继承的类）
 */
-        //输出时将父类指针强转为派生类指针，返回模板类型的值
-        Derive<T>* pt = dynamic_cast<Derive<T>*>(base_.get());
-        if(pt == nullptr){
-            throw "type is unmatch!";
-        }
-        return pt->data_;
-    };
+
 private:
     //基类类型
     class Base{
     public:
         virtual ~Base()=default;
     };
-
     //派生类类型
     template<typename T>
     class Derive : public Base{
@@ -75,6 +83,7 @@ private:
         Derive(T data): data_(data){};
         T data_;
     };
+
     std::unique_ptr<Base> base_;
 };
 //实现一个信号量类
@@ -142,16 +151,18 @@ class Thread
 public:
     // 线程函数对象
     //???????????????????
-    using ThreadFunc = std::function<void()>;
+    using ThreadFunc = std::function<void(int)>;
     // 启动线程
     void start();
     // 线程构造
     Thread(ThreadFunc func);
     // 线程析构
     ~Thread();
-
+    int getId() const;
 private:
     ThreadFunc func_;
+    static int generateId_;
+    int threadId_;//保存线程id
 };
 
 
@@ -182,13 +193,15 @@ public:
 
     ThreadPool(const ThreadPool &) = delete;
     ThreadPool &operator=(const ThreadPool &) = delete;
-
+    //设置线程数量上限
+    void setThreadSizeThreshHold_(int threshhold);
 private:
     // 定义线程函数
-    void threadFunc();
-
+    void threadFunc(int threadid);
+    bool checkRunningState() const;
 private:
-    std::vector<std::unique_ptr<Thread>> threads_; // 线程列表
+    // std::vector<std::unique_ptr<Thread>> threads_; // 线程列表
+    std::unordered_map<int ,std::unique_ptr<Thread>> threads_;
     int initThreadSize_;                           // 初始线程数量
 
     std::queue<std::shared_ptr<Task>> taskQue_; // 任务队列
@@ -200,6 +213,13 @@ private:
     std::condition_variable notEmpty_; // 表示任务队列不空
 
     PoolMode poolMode_; // 当前线程池工作模式
+    //是否已经启动线程池
+    std::atomic_bool isPoolRunning_;
+    //空闲线程的数量
+    std::atomic_int idleThreadSize_;
+    int threadSizeThreshHold_;//线程上限
+    //当前线程数量
+    std::atomic_int curThreadSize_;
 };
 
 

@@ -10,7 +10,8 @@
                 "-g",
                 "${fileDirname}/*.cpp",  // 使用正确的路径
                 "-o",
-                "${fileDirname}/${fileBasenameNoExtension}"
+                "${fileDirname}/${fileBasenameNoExtension}",
+                "-std=c++17"
             ],
             "options": {
                 "cwd": "${fileDirname}"

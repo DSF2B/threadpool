@@ -2,9 +2,9 @@
 #include <pthread.h>
 #include <thread>
 #include <iostream>
-const int TASK_MAX_THRESHHOLD = 1024;
-const int THREAD_MAX_THRESHHOLD = 10;
-const int THREAD_MAX_IDLE_TIME = 60;
+const int TASK_MAX_THRESHHOLD = INT32_MAX;
+const int THREAD_MAX_THRESHHOLD = 100;
+const int THREAD_MAX_IDLE_TIME = 10;
 //******ThreadPool******//
 // 线程池构造
 ThreadPool::ThreadPool() : initThreadSize_(0),
@@ -13,11 +13,19 @@ ThreadPool::ThreadPool() : initThreadSize_(0),
                            poolMode_(PoolMode::MODE_FIXED),
                            isPoolRunning_(false),
                            idleThreadSize_(0),
-                           threadSizeThreshHold_(200),
+                           threadSizeThreshHold_(THREAD_MAX_THRESHHOLD),
                            curThreadSize_(0)
 {}
+//析构，资源回收
 ThreadPool::~ThreadPool() 
-{}
+{   
+    isPoolRunning_=false;
+    //指针可以自动析构
+    //等待线程池里所有线程返回   被阻塞的线程，正在执行的线程，线程通信
+    std::unique_lock<std::mutex> lock(taskQueMtx_);
+
+    exitCond_.wait(lock);
+}
 
 // 设置线程池模式
 void ThreadPool::setMode(PoolMode mode)
@@ -103,17 +111,15 @@ Result ThreadPool::submitTask(std::shared_ptr<Task> sp)
     notEmpty_.notify_all();
     //根据任务数量和空闲线程数量，自动添加新的线程,cached模式，任务处理比较紧急，场景：小而快的任务
     if(poolMode_ == PoolMode::MODE_CACHED
-    && idleThreadSize_ > idleThreadSize_
+    && taskSize_ > idleThreadSize_
     && curThreadSize_ < threadSizeThreshHold_){
+        std::cout<<"create new thread:"<<std::endl;
         auto ptr=std::make_unique<Thread>(std::bind(&ThreadPool::threadFunc,this,std::placeholders::_1));
         int threadId=ptr->getId();
         threads_.emplace(threadId,std::move(ptr));
         curThreadSize_++;
-        // idleThreadSize_++;
+        idleThreadSize_++;
     }
-
-
-
     // 自动释放锁
     return Result(sp);
 }
@@ -126,15 +132,14 @@ Result ThreadPool::submitTask(std::shared_ptr<Task> sp)
 void ThreadPool::threadFunc(int threadid)// 线程函数执行完毕，线程也就结束了
 { 
     auto lastTime=std::chrono::high_resolution_clock().now();
-    while(1)
+    for(;;)
     {
         std::shared_ptr<Task> task;
         {
             // 获取锁
-            std::cout<<"tid"<<std::this_thread::get_id<<"尝试获取任务"<<std::endl;
+            
             std::unique_lock<std::mutex> lock(taskQueMtx_);
-
-
+            std::cout<<"tid:"<<std::this_thread::get_id()<<"尝试获取任务"<<std::endl;
             //cached模式下，有线程空闲时间过长超过60s，就回收线程，线程数不少于初始线程数量
             //当前时间 - 上一次线程执行时间 大于 60s
             if(poolMode_ == PoolMode::MODE_CACHED){
@@ -152,20 +157,20 @@ void ThreadPool::threadFunc(int threadid)// 线程函数执行完毕，线程也
                             //把线程对象从线程容器中删除  
                             //threadid -> thread对象删除
                             curThreadSize_--;
+                            threads_.erase(threadid);
+                            idleThreadSize_--;
+                            std::cout<<"threadid:"<<std::this_thread::get_id()<<"exit"<<std::endl;
+                            return ;
                         }
-                    }
-                    else{
-
                     }
                 }
             }
             else{
-
                 notEmpty_.wait(lock, [&]() -> bool{ return taskQue_.size() > 0; });
             }
 
             idleThreadSize_--;
-            std::cout<<"tid"<<std::this_thread::get_id<<"获取任务成功"<<std::endl;
+            std::cout<<"tid:"<<std::this_thread::get_id()<<"获取任务成功"<<std::endl;
 
             // 从任务队列取一个任务
             task = taskQue_.front();
@@ -182,7 +187,7 @@ void ThreadPool::threadFunc(int threadid)// 线程函数执行完毕，线程也
             //  {}定义作用域，出了作用域，锁自动释放
 
         }
-        std::cout<<"tid"<<std::this_thread::get_id<<"离开冲突区"<<std::endl;
+        std::cout<<"tid:"<<std::this_thread::get_id()<<"离开冲突区"<<std::endl;
         // 当前线程负责执行这个任务
         if (task != nullptr)
         {

@@ -211,7 +211,7 @@ private:
     std::mutex taskQueMtx_;            // 保证任务队列的线程安全
     std::condition_variable notFull_;  // 表示任务队列不满
     std::condition_variable notEmpty_; // 表示任务队列不空
-
+    
     PoolMode poolMode_; // 当前线程池工作模式
     //是否已经启动线程池
     std::atomic_bool isPoolRunning_;
@@ -220,6 +220,8 @@ private:
     int threadSizeThreshHold_;//线程上限
     //当前线程数量
     std::atomic_int curThreadSize_;
+
+    std::condition_variable exitCond_;//等待线程资源全部回收
 };
 
 

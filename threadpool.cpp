@@ -20,11 +20,14 @@ ThreadPool::ThreadPool() : initThreadSize_(0),
 ThreadPool::~ThreadPool() 
 {   
     isPoolRunning_=false;
+    notEmpty_.notify_all();
     //指针可以自动析构
-    //等待线程池里所有线程返回   被阻塞的线程，正在执行的线程，线程通信
+    //等待线程池里所有线程返回,包括等待在NotEmpty上的空闲线程和正在执行的线程
+    //利用线程通信
     std::unique_lock<std::mutex> lock(taskQueMtx_);
-
-    exitCond_.wait(lock);
+    while(!threads_.empty()){
+        exitCond_.wait(lock);
+    }
 }
 
 // 设置线程池模式
@@ -88,7 +91,7 @@ Result ThreadPool::submitTask(std::shared_ptr<Task> sp)
     // 获取锁
     std::unique_lock<std::mutex> lock(taskQueMtx_);
     // 线程通信，等待任务队列有空
-    while (taskQue_.size() == taskQueMaxThreshHold_)
+    while (taskQue_.size() == (size_t)taskQueMaxThreshHold_)
     {
         // 超时反馈
         // wait:一直等 wait_for:加上时间参数 wait_until:时间终点
@@ -116,7 +119,9 @@ Result ThreadPool::submitTask(std::shared_ptr<Task> sp)
         std::cout<<"create new thread:"<<std::endl;
         auto ptr=std::make_unique<Thread>(std::bind(&ThreadPool::threadFunc,this,std::placeholders::_1));
         int threadId=ptr->getId();
+        std::cout<<"threadId:"<<threadId<<std::endl;
         threads_.emplace(threadId,std::move(ptr));
+        threads_[threadId]->start();
         curThreadSize_++;
         idleThreadSize_++;
     }
@@ -132,22 +137,29 @@ Result ThreadPool::submitTask(std::shared_ptr<Task> sp)
 void ThreadPool::threadFunc(int threadid)// 线程函数执行完毕，线程也就结束了
 { 
     auto lastTime=std::chrono::high_resolution_clock().now();
-    for(;;)
+    while(isPoolRunning_)
     {
         std::shared_ptr<Task> task;
         {
             // 获取锁
-            
             std::unique_lock<std::mutex> lock(taskQueMtx_);
             std::cout<<"tid:"<<std::this_thread::get_id()<<"尝试获取任务"<<std::endl;
             //cached模式下，有线程空闲时间过长超过60s，就回收线程，线程数不少于初始线程数量
             //当前时间 - 上一次线程执行时间 大于 60s
-            if(poolMode_ == PoolMode::MODE_CACHED){
-                // 等待notEmpty
-                //每秒返回一次 区分 超市返回和等待生产任务
-                while (taskQue_.size() == 0)
-                {
-                    if(notEmpty_.wait_for(lock,std::chrono::seconds(1)) == std::cv_status::timeout){
+
+            while (taskQue_.size() == 0)
+            {
+                //被唤醒发现Pool已经关闭了，就把线程释放掉
+                if(!isPoolRunning_){
+                    threads_.erase(threadid);
+                    std::cout<<"ThreadPoolEnd,"<<"threadid:"<<std::this_thread::get_id()<<"exit"<<std::endl;
+                    exitCond_.notify_all();
+                    return ;
+                }
+                if(poolMode_ == PoolMode::MODE_CACHED){
+                    // 等待notEmpty
+                    //每秒返回一次 区分 超市返回和等待生产任务
+                    if(std::cv_status::timeout==notEmpty_.wait_for(lock,std::chrono::seconds(1))){
                         //1s轮询
                         auto now = std::chrono::high_resolution_clock().now();
                         auto dur = std::chrono::duration_cast<std::chrono::seconds>(now-lastTime);
@@ -159,14 +171,15 @@ void ThreadPool::threadFunc(int threadid)// 线程函数执行完毕，线程也
                             curThreadSize_--;
                             threads_.erase(threadid);
                             idleThreadSize_--;
-                            std::cout<<"threadid:"<<std::this_thread::get_id()<<"exit"<<std::endl;
+                            std::cout<<"Too much thread,threadid:"<<std::this_thread::get_id()<<"exit"<<std::endl;
                             return ;
                         }
                     }
                 }
-            }
-            else{
-                notEmpty_.wait(lock, [&]() -> bool{ return taskQue_.size() > 0; });
+                else{
+                    notEmpty_.wait(lock);
+                }
+
             }
 
             idleThreadSize_--;
@@ -197,7 +210,10 @@ void ThreadPool::threadFunc(int threadid)// 线程函数执行完毕，线程也
         idleThreadSize_++;
         lastTime=std::chrono::high_resolution_clock().now();//更新任务执行完任务的时间
     }
-    
+    threads_.erase(threadid);
+    std::cout<<"ThreadPoolEnd,"<<"threadid:"<<std::this_thread::get_id()<<"exit"<<std::endl;
+    exitCond_.notify_all();
+    return ;
 }
 bool ThreadPool::checkRunningState() const{
     return isPoolRunning_;
